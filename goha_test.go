@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"git.eaciitapp.com/sebar/dbflex"
+	"github.com/eaciit/goha"
 	_ "github.com/eaciit/goha"
 	"github.com/eaciit/toolkit"
 
@@ -90,6 +91,7 @@ func TestCreateTable(t *testing.T) {
 
 func TestInsertData(t *testing.T) {
 	cv.Convey("Prepare connection", t, func() {
+		goha.SetDefaultFamilyName(hbasefamily)
 		c, e := connect()
 		cv.So(e, cv.ShouldBeNil)
 		defer func() {
@@ -102,11 +104,10 @@ func TestInsertData(t *testing.T) {
 			for i := 0; i < 10; i++ {
 				o := new(obj1)
 				o.ID = toolkit.Sprintf("user-key-%d", i)
-				o.Name = toolkit.Sprintf("user %d", i)
+				o.Name = toolkit.Sprintf("name %d", i)
 				o.Level = 110
 				o.Salary = 1200.65
 				_, e := c.Execute(cmd, toolkit.M{}.Set("data", o).
-					Set("family", hbasefamily).
 					Set("idfieldname", "ID"))
 				if e != nil {
 					es = append(es, toolkit.Sprintf("insert data %d error: %s", i, e.Error()))
@@ -204,7 +205,32 @@ func TestReadAllDataFetchs(t *testing.T) {
 	})
 }
 
-func TestFilterFetchs(t *testing.T) {
+func TestFilterIDFetchs(t *testing.T) {
+	cv.Convey("Prepare connection", t, func() {
+		c, e := connect()
+		cv.So(e, cv.ShouldBeNil)
+		defer func() {
+			c.Close()
+		}()
+
+		cv.Convey("Filter data", func() {
+			cmd := dbflex.From(t1).Select().Where(
+				dbflex.And(dbflex.Gte("ID", "user-key-2"), dbflex.Lte("ID", "user-key-4")))
+			cs := c.Cursor(cmd, toolkit.M{}.Set("idfieldname", "ID"))
+			cv.So(cs.Error(), cv.ShouldBeNil)
+
+			objs := []obj1{}
+			err := cs.Fetchs(&objs, 0)
+			cv.So(err, cv.ShouldBeNil)
+
+			cv.Convey("Validate data", func() {
+				cv.So(len(objs), cv.ShouldEqual, 3)
+			})
+		})
+	})
+}
+
+func TestFilterValueFetchs(t *testing.T) {
 	cv.Convey("Prepare connection", t, func() {
 		c, e := connect()
 		cv.So(e, cv.ShouldBeNil)
@@ -214,7 +240,7 @@ func TestFilterFetchs(t *testing.T) {
 
 		cv.Convey("Filter data", func() {
 			var es []string
-			cmd := dbflex.From(t1).Select().Where(dbflex.Eq("Name", "user 3"))
+			cmd := dbflex.From(t1).Select().Where(dbflex.Eq("Name", "name 3"))
 			cs := c.Cursor(cmd, nil)
 			cv.So(cs.Error(), cv.ShouldBeNil)
 
@@ -228,9 +254,9 @@ func TestFilterFetchs(t *testing.T) {
 				esall := ""
 				i := 0
 				for _, o := range objs {
-					if o.ID != toolkit.Sprintf("user-key-%d", i) {
+					if o.Name != "name 3" {
 						es = append(es, toolkit.Sprintf("data %d not equal: %s != %s", i,
-							o.ID, toolkit.Sprintf("user-key-%d", i)))
+							o.Name, "name 3"))
 					}
 					i++
 				}
@@ -239,6 +265,32 @@ func TestFilterFetchs(t *testing.T) {
 					esall = strings.Join(es, "\n")
 				}
 				cv.So(esall, cv.ShouldEqual, "")
+			})
+		})
+	})
+}
+
+func TestDelete(t *testing.T) {
+	cv.Convey("Prepare connection", t, func() {
+		c, e := connect()
+		cv.So(e, cv.ShouldBeNil)
+		defer func() {
+			c.Close()
+		}()
+
+		cv.Convey("Delete data", func() {
+			//-- since delete by filter is not allowed on HBase, hence deley can only be done by key
+			cmd := dbflex.From(t1).Delete()
+			_, err := c.Execute(cmd, toolkit.M{}.Set("ID", []string{"user-key-3"}))
+			cv.So(err, cv.ShouldBeNil)
+
+			cv.Convey("Validate data", func() {
+				cmd := dbflex.From(t1).Select().Where(dbflex.Eq("ID", "user-key-3"))
+				objs := []obj1{}
+				cs := c.Cursor(cmd, nil)
+				err := cs.Fetchs(&objs, 0)
+				cv.So(err, cv.ShouldBeNil)
+				cv.So(len(objs), cv.ShouldEqual, 0)
 			})
 		})
 	})

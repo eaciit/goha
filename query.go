@@ -35,7 +35,7 @@ func (q *Query) Cursor(in toolkit.M) dbflex.ICursor {
 		return cur
 	}
 
-	where := q.Config(dbflex.ConfigKeyWhere, nil)
+	filter := q.Config(dbflex.ConfigKeyFilter, nil)
 
 	client := q.Connection().(*Connection).client
 	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
@@ -44,10 +44,15 @@ func (q *Query) Cursor(in toolkit.M) dbflex.ICursor {
 		scan *hrpc.Scan
 		err  error
 	)
-	if where == nil {
+	if filter == nil {
 		scan, err = hrpc.NewScan(ctx, []byte(tableName))
 	} else {
 		//fmt.Printf("hrpc call: error\n")
+		where, err := q.BuildFilter(filter.(*dbflex.Filter))
+		if err != nil {
+			cur.SetError(fmt.Errorf("unable build filter. %s", err.Error()))
+			return cur
+		}
 		scan, err = hrpc.NewScanStr(ctx, tableName, where.(func(hrpc.Call) error))
 	}
 
@@ -77,7 +82,9 @@ func (q *Query) Execute(in toolkit.M) (interface{}, error) {
 		cmdname := gitems[dbflex.QueryCommand][0].Value.(toolkit.M).Get("command", "")
 		switch cmdname {
 		case "create-table":
-			families := in.Get("families", []string{"def"}).([]string)
+			familyName := in.Get("family", DefaultFamilyName()).(string)
+
+			families := in.Get("families", []string{familyName}).([]string)
 			mapFamilies := make(map[string]map[string]string, len(families))
 			for _, f := range families {
 				mapFamilies[f] = nil
@@ -106,40 +113,167 @@ func (q *Query) Execute(in toolkit.M) (interface{}, error) {
 			return nil, fmt.Errorf("invalid command: %s", cmdname)
 		}
 
-	case dbflex.QueryInsert:
+	case dbflex.QueryInsert, dbflex.QueryUpdate, dbflex.QuerySave:
 		if !hasData {
 			return nil, fmt.Errorf("hbase insert error: no data specified")
 		}
-		family := in.Get("family", "def").(string)
+		family := in.Get("family", DefaultFamilyName()).(string)
 		idfieldname := in.Get("idfieldname", "").(string)
-		mut, err := toHbasePutStr(ctx, tableName, "", idfieldname, family, data)
+		mut, err := toHbaseMutate(ctx, "save", tableName, "", idfieldname, family, data)
 		if err != nil {
-			return nil, fmt.Errorf("hbase insert error, unable to serialize data. %s", err.Error())
+			return nil, fmt.Errorf("hbase insert error, unable to prepare mutation. %s", err.Error())
 		}
 		res, err := client.Put(mut)
 		return res, nil
+
+	//-- since delete by filter is not allowed on HBase, hence deley can only be done by key
+	case dbflex.QueryDelete:
+		ids := in.Get("ID", []string{}).([]string)
+		family := in.Get("family", DefaultFamilyName()).(string)
+		//idfieldname := in.Get("idfieldname", "").(string)
+		hbfamily := map[string]map[string][]byte{family: nil}
+
+		for _, id := range ids {
+			mut, err := hrpc.NewDelStr(ctx, tableName, id, hbfamily)
+			if err != nil {
+				return nil, fmt.Errorf("hbase delete error, unable to prepare mutation. %s", err.Error())
+			}
+			_, err = client.Delete(mut)
+			if err != nil {
+				return nil, fmt.Errorf("hbase delete error, unable to delete %s. %s", id, err.Error())
+			}
+		}
+		return nil, nil
 	}
 	return nil, fmt.Errorf("%s is not yet implemented for this driver", "Execute")
 }
 
-func (q *Query) BuildFilter(f *dbflex.Filter) (interface{}, error) {
-	hf := filter.NewCompareFilter(filter.Equal, filter.NewBinaryComparator(
-		filter.NewByteArrayComparable([]byte("key-user-1"))))
+var defaultFamilyName = "def"
 
-	filters := hrpc.Filters(hf)
+func SetDefaultFamilyName(s string) {
+	defaultFamilyName = s
+}
+
+func DefaultFamilyName() string {
+	return defaultFamilyName
+}
+
+func (q *Query) BuildFilter(f *dbflex.Filter) (interface{}, error) {
+	idfieldname := q.Config("idfieldname", "ID").(string)
+	familyName := q.Config("familyname", DefaultFamilyName()).(string)
+	hbf := dbf2hbf(familyName, idfieldname, f)
+	//fmt.Printf("hb filter: %v\n", toolkit.JsonString(hbf))
+	filters := hrpc.Filters(hbf)
 	return filters, nil
+}
+
+func dbf2hbf(familyname, idfieldname string, dbf *dbflex.Filter) filter.Filter {
+	if dbf.Field == idfieldname {
+		if dbf.Op == dbflex.OpEq {
+			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
+			hf := filter.NewRowFilter(filter.NewCompareFilter(filter.Equal,
+				filter.NewBinaryComparator(filter.NewByteArrayComparable(bdata))))
+			return hf
+		} else if dbf.Op == dbflex.OpGt {
+			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
+			hf := filter.NewRowFilter(filter.NewCompareFilter(filter.Greater,
+				filter.NewBinaryComparator(filter.NewByteArrayComparable(bdata))))
+			return hf
+		} else if dbf.Op == dbflex.OpGte {
+			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
+			hf := filter.NewRowFilter(filter.NewCompareFilter(filter.GreaterOrEqual,
+				filter.NewBinaryComparator(filter.NewByteArrayComparable(bdata))))
+			return hf
+		} else if dbf.Op == dbflex.OpLt {
+			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
+			hf := filter.NewRowFilter(filter.NewCompareFilter(filter.Less,
+				filter.NewBinaryComparator(filter.NewByteArrayComparable(bdata))))
+			return hf
+		} else if dbf.Op == dbflex.OpLte {
+			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
+			hf := filter.NewRowFilter(filter.NewCompareFilter(filter.LessOrEqual,
+				filter.NewBinaryComparator(filter.NewByteArrayComparable(bdata))))
+			return hf
+		}
+	} else {
+		if dbf.Op == dbflex.OpAnd {
+			list := filter.NewList(filter.MustPassAll)
+			dbfs := dbf.Items
+			for _, dbfc := range dbfs {
+				hbf := dbf2hbf(familyname, idfieldname, dbfc)
+				if hbf != nil {
+					list.AddFilters(hbf)
+				}
+			}
+			//fmt.Printf("List: %v\n", toolkit.JsonString(list))
+			return list
+		} else if dbf.Op == dbflex.OpOr {
+			list := filter.NewList(filter.MustPassOne)
+			dbfs := dbf.Items
+			for _, dbfc := range dbfs {
+				hbf := dbf2hbf(familyname, idfieldname, dbfc)
+				if hbf != nil {
+					list.AddFilters(hbf)
+				}
+			}
+			return list
+		} else if dbf.Op == dbflex.OpEq {
+			//fmt.Printf("search for %s = %s\n", dbf.Field, dbf.Value.(string))
+			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
+			hf := filter.NewSingleColumnValueFilter(
+				[]byte(familyname), []byte(dbf.Field),
+				filter.Equal,
+				filter.NewBinaryComparator(filter.NewByteArrayComparable(bdata)),
+				false, false)
+			return hf
+		} else if dbf.Op == dbflex.OpGt {
+			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
+			hf := filter.NewSingleColumnValueFilter(
+				[]byte(familyname), []byte(dbf.Field),
+				filter.Greater,
+				filter.NewBinaryComparator(filter.NewByteArrayComparable(bdata)),
+				false, false)
+			return hf
+		} else if dbf.Op == dbflex.OpGte {
+			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
+			hf := filter.NewSingleColumnValueFilter(
+				[]byte(familyname), []byte(dbf.Field),
+				filter.GreaterOrEqual,
+				filter.NewBinaryComparator(filter.NewByteArrayComparable(bdata)),
+				false, false)
+			return hf
+		} else if dbf.Op == dbflex.OpLt {
+			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
+			hf := filter.NewSingleColumnValueFilter(
+				[]byte(familyname), []byte(dbf.Field),
+				filter.Less,
+				filter.NewBinaryComparator(filter.NewByteArrayComparable(bdata)),
+				false, false)
+			return hf
+		} else if dbf.Op == dbflex.OpLte {
+			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
+			hf := filter.NewSingleColumnValueFilter(
+				[]byte(familyname), []byte(dbf.Field),
+				filter.LessOrEqual,
+				filter.NewBinaryComparator(filter.NewByteArrayComparable(bdata)),
+				false, false)
+			return hf
+		}
+	}
+	return nil
 }
 
 func (q *Query) BuildCommand() (interface{}, error) {
 	return nil, nil
 }
 
-func toHbasePutStr(ctx context.Context, table, key, idfieldname, family string, data interface{}) (*hrpc.Mutate, error) {
+func toHbaseMutate(ctx context.Context, op string,
+	table, key, idfieldname, family string, data interface{}) (*hrpc.Mutate, error) {
 	hbaseData := map[string]map[string][]byte{}
 	rv := reflect.Indirect(reflect.ValueOf(data))
 	rt := rv.Type()
 	if family == "" {
-		family = "def"
+		family = DefaultFamilyName()
 	}
 	if key == "" {
 		idField := rv.FieldByName(idfieldname)
@@ -182,8 +316,15 @@ func toHbasePutStr(ctx context.Context, table, key, idfieldname, family string, 
 	hbaseData[family] = familyData
 
 	//fmt.Println("data:", hbaseData)
-	putStr, err := hrpc.NewPutStr(ctx, table, key, hbaseData)
-	return putStr, err
+	if op == "save" {
+		putStr, err := hrpc.NewPutStr(ctx, table, key, hbaseData)
+		return putStr, err
+	} else if op == "delete" {
+		req, err := hrpc.NewDelStr(ctx, table, key, hbaseData)
+		return req, err
+	} else {
+		return nil, fmt.Errorf("invalid mutate operation. %s", op)
+	}
 }
 
 func float64ToByte(f float64) []byte {
@@ -197,4 +338,24 @@ func int64ToByte(i int64) []byte {
 	bs := make([]byte, 8)
 	binary.BigEndian.PutUint64(bs, uint64(i))
 	return bs
+}
+
+func toBytes(v reflect.Value, t reflect.Type) []byte {
+	tname := t.String()
+	if tname != "interface{}" && strings.HasPrefix(tname, "int") {
+		return int64ToByte(v.Int())
+	} else if strings.HasPrefix(tname, "float") {
+		return float64ToByte(v.Float())
+	} else if tname == "*time.Time" {
+		t := v.Interface().(time.Time)
+		i := t.UnixNano()
+		return int64ToByte(i)
+	} else if tname == "time.Time" {
+		t := v.Interface().(*time.Time)
+		i := t.UnixNano()
+		return int64ToByte(i)
+	} else {
+		return []byte(v.String())
+		//familyData[fieldName] = []byte("Hello all")
+	}
 }
