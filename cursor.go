@@ -22,6 +22,10 @@ func (cur *Cursor) Reset() error {
 }
 
 func (cur *Cursor) Fetch(dest interface{}) error {
+	if cur.Error() != nil {
+		return cur.Error()
+	}
+
 	if cur.scanner == nil {
 		return fmt.Errorf("cursor is not properly initiated. Scanner is missing")
 	}
@@ -39,6 +43,10 @@ func (cur *Cursor) Fetch(dest interface{}) error {
 }
 
 func (cur *Cursor) Fetchs(dest interface{}, n int) error {
+	if cur.Error() != nil {
+		return cur.Error()
+	}
+
 	if cur.scanner == nil {
 		return fmt.Errorf("cursor is not properly initiated. Scanner is missing")
 	}

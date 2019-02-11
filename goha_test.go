@@ -100,7 +100,7 @@ func TestInsertData(t *testing.T) {
 
 		cv.Convey("Insert data", func() {
 			var es []string
-			cmd := dbflex.From(t1).Insert()
+			cmd := dbflex.From(t1).Save()
 			for i := 0; i < 10; i++ {
 				o := new(obj1)
 				o.ID = toolkit.Sprintf("user-key-%d", i)
