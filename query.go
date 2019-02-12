@@ -39,6 +39,11 @@ func (q *Query) Cursor(in toolkit.M) dbflex.ICursor {
 
 	client := q.Connection().(*Connection).client
 	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+	family := in.Get("family", DefaultFamilyName()).(string)
+	idfieldname := in.Get("idfieldname", DefaultIDFieldName()).(string)
+
+	cur.Set("familyname", family)
+	cur.Set("idfieldname", idfieldname)
 
 	var (
 		scan *hrpc.Scan
@@ -48,6 +53,10 @@ func (q *Query) Cursor(in toolkit.M) dbflex.ICursor {
 		scan, err = hrpc.NewScan(ctx, []byte(tableName))
 	} else {
 		//fmt.Printf("hrpc call: error\n")
+
+		q.SetConfig("familyname", family)
+		q.SetConfig("idfieldname", idfieldname)
+
 		where, err := q.BuildFilter(filter.(*dbflex.Filter))
 		if err != nil {
 			cur.SetError(fmt.Errorf("unable build filter. %s", err.Error()))
@@ -118,7 +127,10 @@ func (q *Query) Execute(in toolkit.M) (interface{}, error) {
 			return nil, fmt.Errorf("hbase insert error: no data specified")
 		}
 		family := in.Get("family", DefaultFamilyName()).(string)
-		idfieldname := in.Get("idfieldname", "").(string)
+		idfieldname := in.Get("idfieldname", DefaultIDFieldName()).(string)
+
+		fmt.Println("ID Field Name:", idfieldname)
+
 		mut, err := toHbaseMutate(ctx, "save", tableName, "", idfieldname, family, data)
 		if err != nil {
 			return nil, fmt.Errorf("hbase insert error, unable to prepare mutation. %s", err.Error())
@@ -128,7 +140,7 @@ func (q *Query) Execute(in toolkit.M) (interface{}, error) {
 
 	//-- since delete by filter is not allowed on HBase, hence deley can only be done by key
 	case dbflex.QueryDelete:
-		ids := in.Get("ID", []string{}).([]string)
+		ids := in.Get(DefaultIDFieldName(), []string{}).([]string)
 		family := in.Get("family", DefaultFamilyName()).(string)
 		//idfieldname := in.Get("idfieldname", "").(string)
 		hbfamily := map[string]map[string][]byte{family: nil}
@@ -159,7 +171,7 @@ func DefaultFamilyName() string {
 }
 
 func (q *Query) BuildFilter(f *dbflex.Filter) (interface{}, error) {
-	idfieldname := q.Config("idfieldname", "ID").(string)
+	idfieldname := q.Config("idfieldname", DefaultIDFieldName()).(string)
 	familyName := q.Config("familyname", DefaultFamilyName()).(string)
 	hbf := dbf2hbf(familyName, idfieldname, f)
 	//fmt.Printf("hb filter: %v\n", toolkit.JsonString(hbf))
@@ -168,7 +180,9 @@ func (q *Query) BuildFilter(f *dbflex.Filter) (interface{}, error) {
 }
 
 func dbf2hbf(familyname, idfieldname string, dbf *dbflex.Filter) filter.Filter {
+	//fmt.Println("idfn0:", dbf.Field, "field:", dbf.Field)
 	if dbf.Field == idfieldname {
+		fmt.Println("idfn1:", dbf.Field)
 		if dbf.Op == dbflex.OpEq {
 			bdata := toBytes(reflect.ValueOf(dbf.Value), reflect.TypeOf(dbf.Value))
 			hf := filter.NewRowFilter(filter.NewCompareFilter(filter.Equal,
@@ -300,13 +314,20 @@ func toHbaseMutate(ctx context.Context, op string,
 				//fmt.Printf("Salaryinsert: %v\n", elem.Float())
 				familyData[fieldName] = float64ToByte(elem.Float())
 			} else if elemTypeString == "*time.Time" {
-				t := elem.Interface().(time.Time)
-				i := t.UnixNano()
+				t := elem.Interface().(*time.Time)
+				i := t.Unix()
 				familyData[fieldName] = int64ToByte(i)
 			} else if elemTypeString == "time.Time" {
-				t := elem.Interface().(*time.Time)
-				i := t.UnixNano()
+				t := elem.Interface().(time.Time)
+				i := t.Unix()
 				familyData[fieldName] = int64ToByte(i)
+			} else if elemTypeString == "bool" {
+				b := elem.Bool()
+				if b {
+					familyData[fieldName] = []byte{1}
+				} else {
+					familyData[fieldName] = []byte{0}
+				}
 			} else {
 				familyData[fieldName] = []byte(elem.String())
 				//familyData[fieldName] = []byte("Hello all")

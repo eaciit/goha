@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 	"strings"
+	"time"
 
 	"git.eaciitapp.com/sebar/dbflex"
 	"github.com/tsuna/gohbase/hrpc"
@@ -29,13 +30,16 @@ func (cur *Cursor) Fetch(dest interface{}) error {
 	if cur.scanner == nil {
 		return fmt.Errorf("cursor is not properly initiated. Scanner is missing")
 	}
+
+	var idFieldName string
+	cur.ConfigRef("idfieldname", DefaultIDFieldName(), &idFieldName)
 	res, err := cur.scanner.Next()
 	if err == io.EOF {
 		return err
 	} else if err != nil {
 		return fmt.Errorf("error fetching hbase cursor. %s", err.Error())
 	}
-	err = unmarshallData(res, dest, "ID")
+	err = unmarshallData(res, dest, idFieldName)
 	if err != nil {
 		return fmt.Errorf("error decode hbase result. %s", err.Error())
 	}
@@ -51,6 +55,8 @@ func (cur *Cursor) Fetchs(dest interface{}, n int) error {
 		return fmt.Errorf("cursor is not properly initiated. Scanner is missing")
 	}
 
+	var idFieldName string
+	cur.ConfigRef("idfieldname", DefaultIDFieldName(), &idFieldName)
 	v := reflect.TypeOf(dest).Elem().Elem()
 	ivs := reflect.MakeSlice(reflect.SliceOf(v), 0, 0)
 
@@ -64,7 +70,7 @@ func (cur *Cursor) Fetchs(dest interface{}, n int) error {
 		}
 
 		iv := reflect.New(v).Interface()
-		err = unmarshallData(res, iv, "ID")
+		err = unmarshallData(res, iv, idFieldName)
 		if err != nil {
 			return fmt.Errorf("error decode hbase result. %s", err.Error())
 		}
@@ -115,6 +121,17 @@ func unmarshallData(res *hrpc.Result, dest interface{}, idFieldName string) erro
 			} else if strings.HasPrefix(tname, "float") {
 				vField.SetFloat(byteToFloat64(bytevalue))
 				//fmt.Printf("salary:%f\n", byteToFloat64(bytevalue))
+			} else if strings.HasPrefix(tname, "time.Time") {
+				t0 := time.Unix(byteToInt(bytevalue), 0)
+				vField.Set(reflect.ValueOf(t0))
+				//fmt.Printf("salary:%f\n", byteToFloat64(bytevalue))
+			} else if tname == "bool" {
+				bint := bytevalue[0]
+				if bint == byte(0) {
+					vField.SetBool(false)
+				} else {
+					vField.SetBool(true)
+				}
 			} else if tname == "string" {
 				vField.SetString(string(bytevalue))
 			} else {

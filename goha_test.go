@@ -24,9 +24,11 @@ type obj1 struct {
 }
 
 type obj2 struct {
-	ID          string
+	ObjID       string
 	Title       string
 	DateCreated time.Time
+	Enable      bool
+	Salary      float64
 }
 
 var (
@@ -288,6 +290,78 @@ func TestDelete(t *testing.T) {
 				cmd := dbflex.From(t1).Select().Where(dbflex.Eq("ID", "user-key-3"))
 				objs := []obj1{}
 				cs := c.Cursor(cmd, nil)
+				err := cs.Fetchs(&objs, 0)
+				cv.So(err, cv.ShouldBeNil)
+				cv.So(len(objs), cv.ShouldEqual, 0)
+			})
+		})
+	})
+}
+
+func TestInsertObj2(t *testing.T) {
+	cv.Convey("Prepare connection", t, func() {
+		c, e := connect()
+		cv.So(e, cv.ShouldBeNil)
+		defer func() {
+			c.Close()
+		}()
+
+		cv.Convey("Insert data", func() {
+			o := new(obj2)
+			o.ObjID = "obj-id-1"
+			o.Title = "This is objid"
+			o.Enable = true
+			o.DateCreated = time.Now()
+
+			cmd := dbflex.From(t1).Save()
+			_, err := c.Execute(cmd, toolkit.M{}.
+				Set("data", o).
+				Set("idfieldname", "ObjID"))
+			cv.So(err, cv.ShouldBeNil)
+
+			cv.Convey("Get data", func() {
+				cmd := dbflex.From(t1).Select().Where(dbflex.Eq("ObjID", "obj-id-1"))
+				objs := []obj2{}
+				cs := c.Cursor(cmd, toolkit.M{}.Set("idfieldname", "ObjID"))
+				err := cs.Fetchs(&objs, 0)
+				cv.So(err, cv.ShouldBeNil)
+				cv.So(len(objs), cv.ShouldEqual, 1)
+
+				cv.Convey("Validate data", func() {
+					o2 := objs[0]
+					cv.So(o2.ObjID, cv.ShouldEqual, o.ObjID)
+					cv.So(o2.Title, cv.ShouldEqual, o.Title)
+
+					diff := o.DateCreated.Sub(o2.DateCreated)
+					cv.So(diff, cv.ShouldBeLessThan, time.Duration(1*time.Second))
+					cv.So(o2.Enable, cv.ShouldEqual, o.Enable)
+				})
+			})
+		})
+	})
+}
+
+func TestDeleteObj2(t *testing.T) {
+	cv.Convey("Prepare connection", t, func() {
+		c, e := connect()
+		cv.So(e, cv.ShouldBeNil)
+		defer func() {
+			c.Close()
+		}()
+
+		cv.Convey("Delete data", func() {
+			//-- since delete by filter is not allowed on HBase, hence deley can only be done by key
+			cmd := dbflex.From(t1).Delete()
+			_, err := c.Execute(cmd, toolkit.M{}.
+				Set("idfieldname", "ObjID").
+				Set("ID", []string{"obj-id-1"}))
+			cv.So(err, cv.ShouldBeNil)
+
+			cv.Convey("Validate data", func() {
+				cmd := dbflex.From(t1).Select().Where(dbflex.Eq("ObjID", "obj-id-1"))
+				objs := []obj1{}
+				cs := c.Cursor(cmd,
+					toolkit.M{}.Set("idfieldname", "ObjID"))
 				err := cs.Fetchs(&objs, 0)
 				cv.So(err, cv.ShouldBeNil)
 				cv.So(len(objs), cv.ShouldEqual, 0)
