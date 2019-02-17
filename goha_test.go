@@ -32,7 +32,7 @@ type obj2 struct {
 }
 
 var (
-	connstr        = "hbase://localhost:2181"
+	connstr        = "hbase://localhost:2181/hbase"
 	hbasenamespace = "bef"
 	hbasefamily    = "def"
 
@@ -41,6 +41,9 @@ var (
 )
 
 func connect() (dbflex.IConnection, error) {
+	//logrus.SetLevel(logrus.DebugLevel)
+	goha.SetContextTimeOut(5 * time.Second)
+	goha.SetActiveNameSpace(hbasenamespace)
 	c, err := dbflex.NewConnectionFromURI(connstr, nil)
 	if err != nil {
 		return nil, err
@@ -103,6 +106,8 @@ func TestInsertData(t *testing.T) {
 		cv.Convey("Insert data", func() {
 			var es []string
 			cmd := dbflex.From(t1).Save()
+
+		insertLoop:
 			for i := 0; i < 10; i++ {
 				o := new(obj1)
 				o.ID = toolkit.Sprintf("user-key-%d", i)
@@ -113,7 +118,7 @@ func TestInsertData(t *testing.T) {
 					Set("idfieldname", "ID"))
 				if e != nil {
 					es = append(es, toolkit.Sprintf("insert data %d error: %s", i, e.Error()))
-					break
+					break insertLoop
 				}
 			}
 

@@ -18,6 +18,8 @@ import (
 
 type Query struct {
 	dbflex.QueryBase
+	ctx       context.Context
+	cancelCtx context.CancelFunc
 }
 
 func (q *Query) Cursor(in toolkit.M) dbflex.ICursor {
@@ -27,7 +29,7 @@ func (q *Query) Cursor(in toolkit.M) dbflex.ICursor {
 	//tableName := q.Config(dbflex.ConfigKeyTableName, "").(string)
 	//items := q.Config(dbflex.ConfigKeyGroupedQueryItems, dbflex.GroupedQueryItems{}).(dbflex.GroupedQueryItems)
 	cmdType := q.Config(dbflex.ConfigKeyCommandType, dbflex.QuerySelect).(string)
-	tableName := q.Config(dbflex.ConfigKeyTableName, "").(string)
+	tableName := tableNameNs(ActiveNameSpace(), q.Config(dbflex.ConfigKeyTableName, "").(string))
 	//familyName := in.Get("family", "def").(string)
 
 	if cmdType != dbflex.QuerySelect {
@@ -38,7 +40,6 @@ func (q *Query) Cursor(in toolkit.M) dbflex.ICursor {
 	filter := q.Config(dbflex.ConfigKeyFilter, nil)
 
 	client := q.Connection().(*Connection).client
-	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
 	family := in.Get("family", DefaultFamilyName()).(string)
 	idfieldname := in.Get("idfieldname", DefaultIDFieldName()).(string)
 
@@ -50,7 +51,7 @@ func (q *Query) Cursor(in toolkit.M) dbflex.ICursor {
 		err  error
 	)
 	if filter == nil {
-		scan, err = hrpc.NewScan(ctx, []byte(tableName))
+		scan, err = hrpc.NewScan(q.ctx, []byte(tableName))
 	} else {
 		//fmt.Printf("hrpc call: error\n")
 
@@ -62,7 +63,7 @@ func (q *Query) Cursor(in toolkit.M) dbflex.ICursor {
 			cur.SetError(fmt.Errorf("unable build filter. %s", err.Error()))
 			return cur
 		}
-		scan, err = hrpc.NewScanStr(ctx, tableName, where.(func(hrpc.Call) error))
+		scan, err = hrpc.NewScanStr(q.ctx, tableName, where.(func(hrpc.Call) error))
 	}
 
 	if err != nil {
@@ -78,12 +79,9 @@ func (q *Query) Execute(in toolkit.M) (interface{}, error) {
 	client := q.Connection().(*Connection).client
 	admin := q.Connection().(*Connection).admin
 	cmdtype := q.Config(dbflex.ConfigKeyCommandType, "")
-	tableName := q.Config(dbflex.ConfigKeyTableName, "").(string)
+	tableName := tableNameNs(ActiveNameSpace(), q.Config(dbflex.ConfigKeyTableName, "").(string))
 
 	data, hasData := in["data"]
-	ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
-	//ctx := context.Background()
-
 	gitems := q.Config(dbflex.ConfigKeyGroupedQueryItems, dbflex.GroupedQueryItems{}).(dbflex.GroupedQueryItems)
 
 	switch cmdtype {
@@ -98,12 +96,15 @@ func (q *Query) Execute(in toolkit.M) (interface{}, error) {
 			for _, f := range families {
 				mapFamilies[f] = nil
 			}
-			hrpcTable := hrpc.NewCreateTable(ctx, []byte(tableName), mapFamilies)
+
+			ns, name := parseTableName(tableName)
+			hrpcTable := hrpc.NewCreateTable(q.ctx, []byte(name), mapFamilies).SetNamespace(ns)
 			e := admin.CreateTable(hrpcTable)
 			return nil, e
 
 		case "delete-table":
-			dit := hrpc.NewDisableTable(ctx, []byte(tableName))
+			ns, name := parseTableName(tableName)
+			dit := hrpc.NewDisableTable(q.ctx, []byte(name)).SetNameSpace(ns)
 			err := admin.DisableTable(dit)
 			if err != nil {
 				if !strings.Contains(err.Error(), "TableNotEnabledException") {
@@ -111,7 +112,7 @@ func (q *Query) Execute(in toolkit.M) (interface{}, error) {
 				}
 			}
 
-			det := hrpc.NewDeleteTable(context.Background(), []byte(tableName))
+			det := hrpc.NewDeleteTable(context.Background(), []byte(name)).SetNameSpace(ns)
 			err = admin.DeleteTable(det)
 			if err != nil {
 				return nil, err
@@ -129,9 +130,8 @@ func (q *Query) Execute(in toolkit.M) (interface{}, error) {
 		family := in.Get("family", DefaultFamilyName()).(string)
 		idfieldname := in.Get("idfieldname", DefaultIDFieldName()).(string)
 
-		fmt.Println("ID Field Name:", idfieldname)
-
-		mut, err := toHbaseMutate(ctx, "save", tableName, "", idfieldname, family, data)
+		//fmt.Println("ID Field Name:", idfieldname)
+		mut, err := toHbaseMutate(q.ctx, "save", tableName, "", idfieldname, family, data)
 		if err != nil {
 			return nil, fmt.Errorf("hbase insert error, unable to prepare mutation. %s", err.Error())
 		}
@@ -146,7 +146,7 @@ func (q *Query) Execute(in toolkit.M) (interface{}, error) {
 		hbfamily := map[string]map[string][]byte{family: nil}
 
 		for _, id := range ids {
-			mut, err := hrpc.NewDelStr(ctx, tableName, id, hbfamily)
+			mut, err := hrpc.NewDelStr(q.ctx, tableName, id, hbfamily)
 			if err != nil {
 				return nil, fmt.Errorf("hbase delete error, unable to prepare mutation. %s", err.Error())
 			}
