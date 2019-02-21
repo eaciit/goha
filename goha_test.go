@@ -12,6 +12,7 @@ import (
 	"github.com/eaciit/goha"
 	_ "github.com/eaciit/goha"
 	"github.com/eaciit/toolkit"
+	"github.com/sirupsen/logrus"
 
 	cv "github.com/smartystreets/goconvey/convey"
 )
@@ -41,7 +42,7 @@ var (
 )
 
 func connect() (dbflex.IConnection, error) {
-	//logrus.SetLevel(logrus.DebugLevel)
+	logrus.SetLevel(logrus.DebugLevel)
 	goha.SetContextTimeOut(5 * time.Second)
 	goha.SetActiveNameSpace(hbasenamespace)
 	c, err := dbflex.NewConnectionFromURI(connstr, nil)
