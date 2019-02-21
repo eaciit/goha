@@ -34,6 +34,10 @@ func (c *Connection) Connect() error {
 			options = append(options, gohbase.ZookeeperRoot(zkRoot))
 		}
 
+		if c.ServerInfo.User != "" {
+			options = append(options, gohbase.EffectiveUser(c.ServerInfo.User))
+		}
+
 		c.client = gohbase.NewClient(c.ServerInfo.Host, options...)
 		c.admin = gohbase.NewAdminClient(c.ServerInfo.Host, options...)
 		c.state = dbflex.StateConnected

@@ -17,6 +17,7 @@ import (
 
 type Connection struct {
 	ConnectionString string
+	User             string
 }
 
 type Config struct {

@@ -4,7 +4,7 @@
            "ConnectionString":"hbase://localhost:2181/hbase"
        },
        "Production":{
-           "ConnectionString":"hbase://hklpathas04.hk.standardchartered.com:2181/hbase-unsecure1"
+           "ConnectionString":"hbase://g.grpprodappdev.001@hklpathas04.hk.standardchartered.com:2181/hbase-unsecure1"
        }
     },
     "ConnectionName":"Local",
