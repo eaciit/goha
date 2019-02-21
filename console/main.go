@@ -64,20 +64,22 @@ func main() {
 	if tableName == "" {
 		tableName = "TestTable"
 	}
-
-	cmdDeleteTable := dbflex.From(tableName).Command("delete-table")
-	conn.Execute(cmdDeleteTable, nil)
-
 	if cfg.Debug {
 		logrus.SetLevel(logrus.DebugLevel)
 	} else {
 		logrus.SetLevel(logrus.InfoLevel)
 	}
-	cmdCreateTable := dbflex.From(tableName).Command("create-table")
-	if _, err = conn.Execute(cmdCreateTable, nil); err != nil {
-		fmt.Println("error create table.", err.Error())
-	}
-	fmt.Println("Create table table success")
+
+	/*
+		cmdDeleteTable := dbflex.From(tableName).Command("delete-table")
+		conn.Execute(cmdDeleteTable, nil)
+
+		cmdCreateTable := dbflex.From(tableName).Command("create-table")
+		if _, err = conn.Execute(cmdCreateTable, nil); err != nil {
+			fmt.Println("error create table.", err.Error())
+		}
+		fmt.Println("Create table table success")
+	*/
 
 	cmd := dbflex.From(tableName).Save()
 
